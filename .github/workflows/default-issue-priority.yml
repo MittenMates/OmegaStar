@@ -1,0 +1,35 @@
+name: Default issue priority
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  set-medium-priority:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Medium priority when no priority was selected
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          current_priority=$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values" \
+            --jq '.[] | select(.issue_field_id == 49306293) | .single_select_option.name')
+
+          if [ -n "$current_priority" ]; then
+            echo "Priority is already $current_priority; keeping it."
+            exit 0
+          fi
+
+          gh api --method POST \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values" \
+            --input - <<'JSON'
+          {"issue_field_values":[{"field_id":49306293,"value":"Medium"}]}
+          JSON
