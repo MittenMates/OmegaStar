@@ -12,14 +12,3 @@ body:
       placeholder: Describe the issue or requested change
     validations:
       required: true
-
-  - type: dropdown
-    id: department
-    attributes:
-      label: Department
-      options:
-        - Gameplay
-        - Art
-      default: 0
-    validations:
-      required: true
