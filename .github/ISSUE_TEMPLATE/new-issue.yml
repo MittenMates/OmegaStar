@@ -1,0 +1,27 @@
+
+name: New Issue
+description: Create a new Omega Star development issue
+type: bug
+assignees:
+  - HILEANDR
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      placeholder: Describe the issue or requested change
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      placeholder: How can this issue be reproduced?
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / Assets
+      placeholder: Additional context, links, or screenshots
