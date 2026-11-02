@@ -1,4 +1,4 @@
-name: Default issue priority
+name: Default issue fields
 
 on:
   issues:
@@ -8,28 +8,45 @@ permissions:
   issues: write
 
 jobs:
-  set-medium-priority:
+  set-default-fields:
     runs-on: ubuntu-latest
     steps:
-      - name: Set Medium priority when no priority was selected
+      - name: Default Priority to Medium and Department to Gameplay
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          current_priority=$(gh api \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values" \
-            --jq '.[] | select(.issue_field_id == 49306293) | .single_select_option.name')
+          endpoint="repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values"
+          current=$(gh api -H "X-GitHub-Api-Version: 2026-03-10" "$endpoint")
 
-          if [ -n "$current_priority" ]; then
-            echo "Priority is already $current_priority; keeping it."
+          priority=$(jq -r '[.[] | select(.issue_field_id == 49306293) | .single_select_option.name][0] // empty' <<< "$current")
+          department=$(jq -r '[.[] | select(.issue_field_id == 49382544) | .single_select_option.name][0] // empty' <<< "$current")
+
+          needs_priority=false
+          needs_department=false
+
+          if [[ -z "$priority" ]]; then
+            needs_priority=true
+          fi
+          if [[ -z "$department" ]]; then
+            needs_department=true
+          fi
+
+          if [[ "$needs_priority" == false && "$needs_department" == false ]]; then
+            echo "Both fields already set; leaving values unchanged."
             exit 0
           fi
 
-          gh api --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values" \
-            --input - <<'JSON'
-          {"issue_field_values":[{"field_id":49306293,"value":"Medium"}]}
-          JSON
+          jq -n --argjson set_priority "$needs_priority" --argjson set_department "$needs_department" '
+            {
+              issue_field_values:
+                (if $set_priority then [{"field_id":49306293,"value":"Medium"}] else [] end)
+                +
+                (if $set_department then [{"field_id":49382544,"value":"Gameplay"}] else [] end)
+            }
+          ' > default-fields.json
+
+          gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint" --input default-fields.json
