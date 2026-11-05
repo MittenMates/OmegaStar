@@ -1,0 +1,57 @@
+name: Assign Gameplay issues ready for testing
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assign-tester:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.OMEGASTAR_PROJECT_TOKEN }}
+    steps:
+      - name: Assign matching issues to Callum
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::warning::Add OMEGASTAR_PROJECT_TOKEN in repository Actions secrets to enable this workflow."
+            exit 0
+          fi
+
+          # Read the existing MittenMates organization Project and its real field values.
+          items=$(gh project item-list 1 --owner MittenMates --limit 1000 --format json --field Status --field Department)
+
+          # Only handle repository issues in Gameplay with Project status Ready for Testing.
+          mapfile -t matching_urls < <(
+            jq -r '
+              .items[]
+              | select((.status // .Status) == "Ready for Testing"
+                  and (.department // .Department) == "Gameplay"
+                  and .content.type == "Issue")
+              | .content.url // empty
+            ' <<< "$items" |
+            grep -Ei '^https://github\.com/MittenMates/OmegaStar/issues/[0-9]+$' || true
+          )
+
+          for url in "${matching_urls[@]}"; do
+            echo "Checking $url"
+            assignees=$(gh issue view "$url" --json assignees --jq '.assignees[].login')
+
+            # Add the tester if not already assigned.
+            if ! grep -Fxiq 'callumtmccole' <<< "$assignees"; then
+              gh issue edit "$url" --add-assignee callumtmccole
+            fi
+
+            # Hand testing work off from Andrew to Callum.
+            # Other contributors remain assigned.
+            if grep -Fxiq 'HILEANDR' <<< "$assignees"; then
+              gh issue edit "$url" --remove-assignee HILEANDR
+            fi
+          done
+
+          echo "Checked ${#matching_urls[@]} matching issues."
