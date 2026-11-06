@@ -114,27 +114,50 @@ jobs:
           for assignment in "${assignments[@]}"; do
             IFS='|' read -r department status url <<< "$assignment"
             if [[ "${status,,}" == "todo" ]]; then
-              desired="HILEANDR"
+              desired="hileandr"
             elif [[ "${department,,}" == "gameplay" ]]; then
               desired="callumtmccole"
             else
               desired="robert3000"
             fi
 
-            echo "Checking $url: $department / $status -> $desired"
-            assignees=$(gh issue view "$url" --json assignees --jq '.assignees[].login')
+            issue_number="${url##*/}"
+            endpoint="repos/MittenMates/OmegaStar/issues/$issue_number"
+            current_assignees=$(gh api "$endpoint" --jq '[.assignees[].login]')
 
-            if ! grep -Fxiq "$desired" <<< "$assignees"; then
-              gh issue edit "$url" --add-assignee "$desired"
+            # Retain collaborators unrelated to this handoff and set exactly
+            # one of Andrew, Callum, and Robert. GitHub's PATCH /issues endpoint
+            # replaces the assignee list atomically.
+            payload=$(jq -cn --argjson names "$current_assignees" --arg desired "$desired" '
+              {
+                assignees: (
+                  ($names | map(select(
+                    (ascii_downcase != "hileandr") and
+                    (ascii_downcase != "callumtmccole") and
+                    (ascii_downcase != "robert3000")
+                  ))) + [$desired] | unique
+                )
+              }
+            ')
+
+            expected=$(jq -c '[.assignees[] | ascii_downcase] | sort' <<< "$payload")
+            actual_before=$(jq -cn --argjson names "$current_assignees" '$names | map(ascii_downcase) | sort')
+
+            if [[ "$actual_before" == "$expected" ]]; then
+              echo "Already correct: $url ($department / $status -> $desired)"
+              continue
             fi
 
-            # Keep only the current primary assignee among the three handoff owners.
-            # Never remove other collaborators assigned to this issue.
-            for person in HILEANDR callumtmccole robert3000; do
-              if [[ "${person,,}" != "${desired,,}" ]] && grep -Fxiq "$person" <<< "$assignees"; then
-                gh issue edit "$url" --remove-assignee "$person"
-              fi
-            done
+            echo "Updating $url: $department / $status -> $desired"
+            updated=$(gh api --method PATCH "$endpoint" --input - <<< "$payload")
+            actual_after=$(jq -c '[.assignees[].login | ascii_downcase] | sort' <<< "$updated")
+            if [[ "$actual_after" != "$expected" ]]; then
+              echo "::error::Assignees for $url did not match requested assignment."
+              echo "Expected: $expected"
+              echo "Actual: $actual_after"
+              exit 1
+            fi
+            echo "Verified assignees: $actual_after"
           done
 
           echo "Finished assignment sync."
