@@ -24,7 +24,7 @@ jobs:
             exit 1
           fi
 
-          items=$(gh project item-list 1 --owner MittenMates --limit 1000 --format json --field Status --field Department)
+          items=$(gh project item-list 1 --owner MittenMates --limit 1000 --format json)
 
           # Gameplay Todo -> Andrew, Gameplay Ready for Testing -> Callum,
           # Art Ready for Testing -> Robert.
