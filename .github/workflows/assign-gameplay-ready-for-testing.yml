@@ -14,40 +14,106 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.OMEGASTAR_PROJECT_TOKEN }}
     steps:
-      - name: Assign Gameplay Todo to Andrew and testing issues to Callum or Robert
+      - name: Assign issues using Project status and Department
         shell: bash
         run: |
           set -euo pipefail
 
           if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::Add OMEGASTAR_PROJECT_TOKEN to the repository Actions secrets."
+            echo "::error::OMEGASTAR_PROJECT_TOKEN is missing."
             exit 1
           fi
 
-          items=$(gh project item-list 1 --owner MittenMates --limit 1000 --format json)
+          # Query the organization's Project directly via GraphQL.
+          # The issue_fields feature header is required to read Department,
+          # which is an organization-level Issue field.
+          query='
+          query($login: String!, $number: Int!, $after: String) {
+            organization(login: $login) {
+              projectV2(number: $number) {
+                items(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    content {
+                      __typename
+                      ... on Issue {
+                        url
+                        repository { nameWithOwner }
+                      }
+                    }
+                    fieldValues(first: 40) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                          field { ... on ProjectV2FieldCommon { name } }
+                        }
+                        ... on ProjectV2ItemIssueFieldValue {
+                          field { ... on ProjectV2FieldCommon { name } }
+                          issueFieldValue {
+                            ... on IssueFieldSingleSelectValue { name }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }'
 
-          # Gameplay Todo -> Andrew, Gameplay Ready for Testing -> Callum,
-          # Art Ready for Testing -> Robert.
-          mapfile -t assignments < <(
-            jq -r '
-              .items[]
-              | ((.department // .Department // "") | ascii_downcase) as $dept
-              | ((.status // .Status // "") | ascii_downcase) as $state
-              | select(
-                  ($dept == "gameplay" and
-                   ($state == "todo" or $state == "ready for testing"))
-                  or
-                  ($dept == "art" and $state == "ready for testing")
-                )
-              | select(.content.type == "Issue")
-              | select((.content.url // "") | startswith("https://github.com/MittenMates/OmegaStar/issues/"))
-              | [(.department // .Department), (.status // .Status), .content.url] | join("|")
-            ' <<< "$items"
-          )
+          cursor=""
+          assignments=()
+          while :; do
+            args=(graphql -H "GraphQL-Features: issue_fields" -f "query=$query" -f login=MittenMates -F number=1)
+            if [[ -n "$cursor" ]]; then
+              args+=(-f "after=$cursor")
+            fi
+            page=$(gh api "${args[@]}")
 
+            if jq -e '.errors // [] | length > 0' <<< "$page" >/dev/null; then
+              jq -r '.errors[].message' <<< "$page" >&2
+              exit 1
+            fi
+            if ! jq -e '.data.organization.projectV2.items.nodes | type == "array"' <<< "$page" >/dev/null; then
+              echo "::error::Cannot access MittenMates Project #1. Check token project and read:org scopes."
+              exit 1
+            fi
+
+            # Extract actual repository issues, using the Project Status and
+            # organization Issue field Department; comparisons ignore case.
+            mapfile -t batch < <(
+              jq -r '
+                .data.organization.projectV2.items.nodes[]
+                | select(.content.__typename == "Issue")
+                | select((.content.repository.nameWithOwner // "" | ascii_downcase) == "mittenmates/omegastar")
+                | . as $item
+                | ([.fieldValues.nodes[]? | select((.field.name // "" | ascii_downcase) == "status") | .name][0] // "") as $status
+                | ([.fieldValues.nodes[]? | select((.field.name // "" | ascii_downcase) == "department") | (.issueFieldValue.name // .name)][0] // "") as $department
+                | select(
+                    (($department | ascii_downcase) == "gameplay" and
+                     (($status | ascii_downcase) == "todo" or
+                      ($status | ascii_downcase) == "ready for testing"))
+                    or
+                    (($department | ascii_downcase) == "art" and
+                     ($status | ascii_downcase) == "ready for testing")
+                  )
+                | [$department, $status, $item.content.url] | join("|")
+              ' <<< "$page"
+            )
+            assignments+=("${batch[@]}")
+
+            has_more=$(jq -r '.data.organization.projectV2.items.pageInfo.hasNextPage' <<< "$page")
+            if [[ "$has_more" != true ]]; then break; fi
+            cursor=$(jq -r '.data.organization.projectV2.items.pageInfo.endCursor // empty' <<< "$page")
+            if [[ -z "$cursor" ]]; then
+              echo "::error::Project pagination returned no cursor."
+              exit 1
+            fi
+          done
+
+          echo "Found ${#assignments[@]} issues matching handoff rules."
           for assignment in "${assignments[@]}"; do
             IFS='|' read -r department status url <<< "$assignment"
-
             if [[ "${department,,}" == "gameplay" && "${status,,}" == "todo" ]]; then
               desired="HILEANDR"
               previous="callumtmccole"
@@ -65,12 +131,9 @@ jobs:
             if ! grep -Fxiq "$desired" <<< "$assignees"; then
               gh issue edit "$url" --add-assignee "$desired"
             fi
-
-            # This is a handoff, so remove the previous primary assignee.
-            # Preserve all other contributors.
             if grep -Fxiq "$previous" <<< "$assignees"; then
               gh issue edit "$url" --remove-assignee "$previous"
             fi
           done
 
-          echo "Checked ${#assignments[@]} matching issues."
+          echo "Finished assignment sync."
