@@ -18,6 +18,8 @@ jobs:
           REPO: ${{ github.repository }}
         shell: bash
         run: |
+          set -euo pipefail
+
           endpoint="repos/$REPO/issues/$ISSUE_NUMBER/issue-field-values"
           current=$(gh api -H "X-GitHub-Api-Version: 2026-03-10" "$endpoint")
 
@@ -26,27 +28,45 @@ jobs:
 
           needs_priority=false
           needs_department=false
-
-          if [[ -z "$priority" ]]; then
-            needs_priority=true
-          fi
-          if [[ -z "$department" ]]; then
-            needs_department=true
-          fi
+          if [[ -z "$priority" ]]; then needs_priority=true; fi
+          if [[ -z "$department" ]]; then needs_department=true; fi
 
           if [[ "$needs_priority" == false && "$needs_department" == false ]]; then
-            echo "Both fields already set; leaving values unchanged."
+            echo "Priority ($priority) and Department ($department) are already set."
             exit 0
           fi
 
-          jq -n --argjson set_priority "$needs_priority" --argjson set_department "$needs_department" '
+          # Construct a valid JSON request body, adding only missing values.
+          jq -n --argjson np "$needs_priority" --argjson nd "$needs_department" '
             {
-              issue_field_values:
-                (if $set_priority then [{"field_id":49306293,"value":"Medium"}] else [] end)
-                +
-                (if $set_department then [{"field_id":49382544,"value":"Gameplay"}] else [] end)
+              issue_field_values: [
+                (if $np then {field_id: 49306293, value: "Medium"} else empty end),
+                (if $nd then {field_id: 49382544, value: "Gameplay"} else empty end)
+              ]
             }
           ' > default-fields.json
+          jq -e '.issue_field_values | type == "array" and length > 0' default-fields.json >/dev/null
+          echo "Setting missing fields for issue #$ISSUE_NUMBER:"
+          cat default-fields.json
 
-          gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --input default-fields.json
+          # Use curl to preserve clear HTTP errors and avoid gh api response parsing
+          # failures if GitHub returns an empty response body.
+          curl --fail-with-body --silent --show-error --location \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --header "Content-Type: application/json" \
+            --data-binary @default-fields.json \
+            "https://api.github.com/$endpoint" > api-response.json
+
+          # Verify the saved values rather than assuming that a successful request
+          # changed the issue.
+          updated=$(gh api -H "X-GitHub-Api-Version: 2026-03-10" "$endpoint")
+          if [[ "$needs_priority" == true ]]; then
+            jq -e 'any(.[]; .issue_field_id == 49306293 and .single_select_option.name == "Medium")' <<< "$updated" >/dev/null
+          fi
+          if [[ "$needs_department" == true ]]; then
+            jq -e 'any(.[]; .issue_field_id == 49382544 and .single_select_option.name == "Gameplay")' <<< "$updated" >/dev/null
+          fi
+          echo "Confirmed default issue fields for #$ISSUE_NUMBER."
