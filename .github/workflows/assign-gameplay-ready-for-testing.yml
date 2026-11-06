@@ -1,4 +1,4 @@
-name: Assign Gameplay issues by Project status
+name: Assign Omega Star issues by Department and status
 
 on:
   schedule:
@@ -14,7 +14,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.OMEGASTAR_PROJECT_TOKEN }}
     steps:
-      - name: Assign Gameplay Todo to Andrew and Ready for Testing to Callum
+      - name: Assign Gameplay Todo to Andrew and testing issues to Callum or Robert
         shell: bash
         run: |
           set -euo pipefail
@@ -27,32 +27,54 @@ jobs:
           # Read the MittenMates Omega Star Development Project.
           items=$(gh project item-list 1 --owner MittenMates --limit 1000 --format json --field Status --field Department)
 
-          # Only process actual OmegaStar repository issues in the Gameplay department,
-          # and only for the two status values used for handoffs.
+          # Only process OmegaStar repository issues in these handoff states:
+          # Gameplay + Todo -> Andrew, Gameplay + Ready for Testing -> Callum,
+          # Art + Ready for Testing -> Robert.
           mapfile -t assignments < <(
             jq -r '
               .items[]
-              | select((.department // .Department) == "Gameplay")
-              | select((.status // .Status) == "Todo" or
-                       (.status // .Status) == "Ready for Testing")
+              | select(
+                  ((.department // .Department) == "Gameplay" and
+                   ((.status // .Status) == "Todo" or
+                    (.status // .Status) == "Ready for Testing"))
+                  or
+                  ((.department // .Department) == "Art" and
+                   (.status // .Status) == "Ready for Testing")
+                )
               | select(.content.type == "Issue")
               | select((.content.url // "") | test("^https://github\\.com/MittenMates/OmegaStar/issues/[0-9]+$"; "i"))
-              | [(.status // .Status), .content.url] | @tsv
+              | [(.department // .Department), (.status // .Status), .content.url] | @tsv
             ' <<< "$items"
           )
 
           for assignment in "${assignments[@]}"; do
-            IFS=$'\t' read -r status url <<< "$assignment"
+            IFS=
+            assignees=$(gh issue view "$url" --json assignees --jq '.assignees[].login')
 
-            if [[ "$status" == "Todo" ]]; then
+            # Only update the assignee when needed, to avoid notifications and API calls.
+            if ! grep -Fxiq "$desired" <<< "$assignees"; then
+              gh issue edit "$url" --add-assignee "$desired"
+            fi
+            if grep -Fxiq "$previous" <<< "$assignees"; then
+              gh issue edit "$url" --remove-assignee "$previous"
+            fi
+          done
+
+          echo "Checked ${#assignments[@]} matching issues."
+\t' read -r department status url <<< "$assignment"
+
+            if [[ "$department" == "Gameplay" && "$status" == "Todo" ]]; then
               desired="HILEANDR"
               previous="callumtmccole"
-            else
+            elif [[ "$department" == "Gameplay" ]]; then
               desired="callumtmccole"
+              previous="HILEANDR"
+            else
+              desired="robert3000"
               previous="HILEANDR"
             fi
 
-            echo "Checking $url: $status -> $desired"
+            echo "Checking $url: $department / $status -> $desired"
             assignees=$(gh issue view "$url" --json assignees --jq '.assignees[].login')
 
             # Only update the assignee when needed, to avoid notifications and API calls.
