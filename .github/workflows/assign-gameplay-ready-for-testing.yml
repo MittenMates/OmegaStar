@@ -31,13 +31,13 @@ jobs:
           mapfile -t assignments < <(
             jq -r '
               .items[]
+              | ((.department // .Department // "") | ascii_downcase) as $dept
+              | ((.status // .Status // "") | ascii_downcase) as $state
               | select(
-                  ((.department // .Department) == "Gameplay" and
-                    ((.status // .Status) == "Todo" or
-                     (.status // .Status) == "Ready for Testing"))
+                  ($dept == "gameplay" and
+                   ($state == "todo" or $state == "ready for testing"))
                   or
-                  ((.department // .Department) == "Art" and
-                   (.status // .Status) == "Ready for Testing")
+                  ($dept == "art" and $state == "ready for testing")
                 )
               | select(.content.type == "Issue")
               | select((.content.url // "") | startswith("https://github.com/MittenMates/OmegaStar/issues/"))
@@ -48,10 +48,10 @@ jobs:
           for assignment in "${assignments[@]}"; do
             IFS='|' read -r department status url <<< "$assignment"
 
-            if [[ "$department" == "Gameplay" && "$status" == "Todo" ]]; then
+            if [[ "${department,,}" == "gameplay" && "${status,,}" == "todo" ]]; then
               desired="HILEANDR"
               previous="callumtmccole"
-            elif [[ "$department" == "Gameplay" ]]; then
+            elif [[ "${department,,}" == "gameplay" ]]; then
               desired="callumtmccole"
               previous="HILEANDR"
             else
