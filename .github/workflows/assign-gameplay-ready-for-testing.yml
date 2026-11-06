@@ -90,11 +90,10 @@ jobs:
                 | ([.fieldValues.nodes[]? | select((.field.name // "" | ascii_downcase) == "status") | .name][0] // "") as $status
                 | ([.fieldValues.nodes[]? | select((.field.name // "" | ascii_downcase) == "department") | (.issueFieldValue.name // .name)][0] // "") as $department
                 | select(
-                    (($department | ascii_downcase) == "gameplay" and
-                     (($status | ascii_downcase) == "todo" or
-                      ($status | ascii_downcase) == "ready for testing"))
-                    or
-                    (($department | ascii_downcase) == "art" and
+                    (($department | ascii_downcase) == "gameplay" or
+                     ($department | ascii_downcase) == "art")
+                    and
+                    (($status | ascii_downcase) == "todo" or
                      ($status | ascii_downcase) == "ready for testing")
                   )
                 | [$department, $status, $item.content.url] | join("|")
@@ -114,15 +113,12 @@ jobs:
           echo "Found ${#assignments[@]} issues matching handoff rules."
           for assignment in "${assignments[@]}"; do
             IFS='|' read -r department status url <<< "$assignment"
-            if [[ "${department,,}" == "gameplay" && "${status,,}" == "todo" ]]; then
+            if [[ "${status,,}" == "todo" ]]; then
               desired="HILEANDR"
-              previous="callumtmccole"
             elif [[ "${department,,}" == "gameplay" ]]; then
               desired="callumtmccole"
-              previous="HILEANDR"
             else
               desired="robert3000"
-              previous="HILEANDR"
             fi
 
             echo "Checking $url: $department / $status -> $desired"
@@ -131,9 +127,14 @@ jobs:
             if ! grep -Fxiq "$desired" <<< "$assignees"; then
               gh issue edit "$url" --add-assignee "$desired"
             fi
-            if grep -Fxiq "$previous" <<< "$assignees"; then
-              gh issue edit "$url" --remove-assignee "$previous"
-            fi
+
+            # Keep only the current primary assignee among the three handoff owners.
+            # Never remove other collaborators assigned to this issue.
+            for person in HILEANDR callumtmccole robert3000; do
+              if [[ "${person,,}" != "${desired,,}" ]] && grep -Fxiq "$person" <<< "$assignees"; then
+                gh issue edit "$url" --remove-assignee "$person"
+              fi
+            done
           done
 
           echo "Finished assignment sync."
